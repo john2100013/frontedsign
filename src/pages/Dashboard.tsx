@@ -25,6 +25,7 @@ interface Stats {
   draftDocuments?: number;
   waitingConfirmation?: number;
   sentForSigning?: number;
+  sentBackForSigning?: number;
 }
 
 interface Activity {
@@ -46,6 +47,8 @@ export function Dashboard() {
   const [assignedDocuments, setAssignedDocuments] = useState<Document[]>([]);
   const [assignedToSign, setAssignedToSign] = useState<Document[]>([]);
   const [waitingConfirmation, setWaitingConfirmation] = useState<Document[]>([]);
+  const [sentBackForSigning, setSentBackForSigning] = useState<Document[]>([]); // Documents I sent back (for management) or sent back to me (for recipients)
+  const [sentBackToMe, setSentBackToMe] = useState<Document[]>([]); // Documents sent back to me (for management who are also recipients)
   const [stats, setStats] = useState<Stats>({});
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,9 +74,11 @@ export function Dashboard() {
       loadActivity();
       loadWaitingConfirmation();
       loadAssignedToSign(); // Management users can also be assigned documents
+      loadSentBackForSigning(); // Management users can see documents they sent back
     } else {
       loadAssignedDocuments();
       loadAssignedToSign();
+      loadSentBackForSigning();
       loadStats();
     }
   }, [user]);
@@ -147,6 +152,40 @@ export function Dashboard() {
     } catch (error) {
       console.error('Failed to load waiting confirmation:', error);
       setWaitingConfirmation([]);
+    }
+  };
+
+  const loadSentBackForSigning = async () => {
+    try {
+      const response = await api.get('/documents/sent-back-for-signing');
+      const docs = response.data.documents || [];
+      console.log('🔄 Sent Back for Signing documents:', docs.length, docs);
+      
+      if (user?.role === 'management') {
+        // For management: these are documents they sent back
+        setSentBackForSigning(docs);
+        // Also check if they have documents sent back to them (as recipients)
+        await loadSentBackToMe();
+      } else {
+        // For recipients: these are documents sent back to them
+        setSentBackForSigning(docs);
+      }
+    } catch (error) {
+      console.error('Failed to load sent back for signing:', error);
+      setSentBackForSigning([]);
+    }
+  };
+
+  const loadSentBackToMe = async () => {
+    try {
+      // For management users, get documents sent back to them (where they are recipients, not owners)
+      const response = await api.get('/documents/sent-back-to-me');
+      const docs = response.data.documents || [];
+      console.log('🔄 Sent Back to Me documents (for management as recipient):', docs.length, docs);
+      setSentBackToMe(docs);
+    } catch (error) {
+      console.error('Failed to load sent back to me:', error);
+      setSentBackToMe([]);
     }
   };
 
@@ -385,7 +424,7 @@ export function Dashboard() {
 
           {/* Stats Cards - Management */}
           {user?.role === 'management' && (
-            <div className={`grid grid-cols-1 md:grid-cols-2 ${(stats.waitingConfirmation && stats.waitingConfirmation > 0) || (assignedToSign.length > 0) || (stats.sentForSigning && stats.sentForSigning > 0) ? 'lg:grid-cols-6' : 'lg:grid-cols-4'} gap-6 mb-8`}>
+            <div className={`grid grid-cols-1 md:grid-cols-2 ${(stats.waitingConfirmation && stats.waitingConfirmation > 0) || (assignedToSign.length > 0) || (stats.sentForSigning && stats.sentForSigning > 0) || (stats.sentBackForSigning && stats.sentBackForSigning > 0) ? 'lg:grid-cols-7' : 'lg:grid-cols-4'} gap-6 mb-8`}>
               {stats.sentForSigning !== undefined && stats.sentForSigning > 0 && (
                 <div className="bg-white rounded-lg shadow p-6 border-2 border-indigo-300">
                   <div className="flex items-center justify-between">
@@ -425,6 +464,20 @@ export function Dashboard() {
                       <p className="text-sm text-blue-600 mt-1">Needs Review</p>
                     </div>
                     <div className="text-blue-600 text-4xl">⏳</div>
+                  </div>
+                </div>
+              )}
+              {stats.sentBackForSigning !== undefined && stats.sentBackForSigning > 0 && (
+                <div className="bg-white rounded-lg shadow p-6 border-2 border-red-300">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-gray-600">Sent Back for Signing</p>
+                      <p className="text-3xl font-bold text-gray-900 mt-2">
+                        {stats.sentBackForSigning || 0}
+                      </p>
+                      <p className="text-sm text-red-600 mt-1">Needs Revision</p>
+                    </div>
+                    <div className="text-red-600 text-4xl">🔄</div>
                   </div>
                 </div>
               )}
@@ -530,6 +583,150 @@ export function Dashboard() {
             </div>
           )}
 
+          {/* Sent Back to Me to Sign Again Card - For Recipients */}
+          {user?.role !== 'management' && (
+            <div className="bg-white rounded-lg shadow mb-6 p-6 border-2 border-red-300">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-bold text-gray-900">Sent Back to Me to Sign Again</h3>
+                <span className="px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm font-medium">
+                  {sentBackForSigning.length} {sentBackForSigning.length === 1 ? 'document' : 'documents'}
+                </span>
+              </div>
+              {sentBackForSigning.length > 0 ? (
+                <div className="space-y-3">
+                  {sentBackForSigning.map((doc: any) => (
+                    <div key={doc.id} className="border border-red-200 rounded-lg p-4 hover:bg-red-50">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <h4 className="text-lg font-medium text-gray-900">{doc.title}</h4>
+                          <p className="text-sm text-gray-500 mt-1">
+                            From {doc.sender_name} ({doc.sender_email})
+                            {doc.sent_back_at && ` • ${formatDistanceToNow(new Date(doc.sent_back_at), { addSuffix: true })}`}
+                          </p>
+                          {doc.revision_note && (
+                            <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded">
+                              <p className="text-xs font-semibold text-yellow-800 mb-1">Revision Note:</p>
+                              <p className="text-sm text-gray-700 whitespace-pre-wrap">{doc.revision_note}</p>
+                            </div>
+                          )}
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium mt-2 bg-red-100 text-red-800">
+                            Sent Back for Signing
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => navigate(`/documents/${doc.id}/sign`)}
+                          className="ml-4 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+                        >
+                          Sign Again
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-gray-500">
+                  <p>No documents sent back for signing</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Sent Back to Me to Sign Again Card - For Management (as recipients) */}
+          {user?.role === 'management' && (
+            <div className="bg-white rounded-lg shadow mb-6 p-6 border-2 border-red-300">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-bold text-gray-900">Sent Back to Me to Sign Again</h3>
+                <span className="px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm font-medium">
+                  {sentBackToMe.length} {sentBackToMe.length === 1 ? 'document' : 'documents'}
+                </span>
+              </div>
+              {sentBackToMe.length > 0 ? (
+                <div className="space-y-3">
+                  {sentBackToMe.map((doc: any) => (
+                    <div key={doc.id} className="border border-red-200 rounded-lg p-4 hover:bg-red-50">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <h4 className="text-lg font-medium text-gray-900">{doc.title}</h4>
+                          <p className="text-sm text-gray-500 mt-1">
+                            From {doc.sender_name} ({doc.sender_email})
+                            {doc.sent_back_at && ` • ${formatDistanceToNow(new Date(doc.sent_back_at), { addSuffix: true })}`}
+                          </p>
+                          {doc.revision_note && (
+                            <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded">
+                              <p className="text-xs font-semibold text-yellow-800 mb-1">Revision Note:</p>
+                              <p className="text-sm text-gray-700 whitespace-pre-wrap">{doc.revision_note}</p>
+                            </div>
+                          )}
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium mt-2 bg-red-100 text-red-800">
+                            Sent Back for Signing
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => navigate(`/documents/${doc.id}/sign`)}
+                          className="ml-4 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+                        >
+                          Sign Again
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-gray-500">
+                  <p>No documents sent back for signing</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Sent Back for Signing Card - For Management (documents they sent back) */}
+          {user?.role === 'management' && (
+            <div className="bg-white rounded-lg shadow mb-6 p-6 border-2 border-red-300">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-bold text-gray-900">Sent Back for Signing</h3>
+                <span className="px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm font-medium">
+                  {sentBackForSigning.length} {sentBackForSigning.length === 1 ? 'document' : 'documents'}
+                </span>
+              </div>
+              {sentBackForSigning.length > 0 ? (
+                <div className="space-y-3">
+                  {sentBackForSigning.map((doc: any) => (
+                    <div key={doc.id} className="border border-red-200 rounded-lg p-4 hover:bg-red-50">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <h4 className="text-lg font-medium text-gray-900">{doc.title}</h4>
+                          <p className="text-sm text-gray-500 mt-1">
+                            Sent back to {doc.recipient_name} ({doc.recipient_email})
+                            {doc.sent_back_at && ` • ${formatDistanceToNow(new Date(doc.sent_back_at), { addSuffix: true })}`}
+                          </p>
+                          {doc.revision_note && (
+                            <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded">
+                              <p className="text-xs font-semibold text-yellow-800 mb-1">Revision Note:</p>
+                              <p className="text-sm text-gray-700 whitespace-pre-wrap">{doc.revision_note}</p>
+                            </div>
+                          )}
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium mt-2 bg-red-100 text-red-800">
+                            Sent Back for Signing
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => navigate(`/documents/${doc.id}/preview`)}
+                          className="ml-4 px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+                        >
+                          View
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-gray-500">
+                  <p>No documents sent back for signing</p>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Waiting for Confirmation Card - For Management */}
           {user?.role === 'management' && waitingConfirmation.length > 0 && (
             <div className="bg-white rounded-lg shadow mb-6 p-6">
@@ -555,7 +752,7 @@ export function Dashboard() {
                       </div>
                       <div className="flex space-x-2 ml-4">
                         <button
-                          onClick={() => navigate(`/documents/${doc.id}`)}
+                          onClick={() => navigate(`/documents/${doc.id}/preview`)}
                           className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
                         >
                           View

@@ -5,6 +5,7 @@ import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { Dashboard } from './pages/Dashboard';
 import { DocumentSign } from './pages/DocumentSign';
+import { DocumentPreview } from './pages/DocumentPreview';
 import { Profile } from './pages/Profile';
 
 function AppRoutes() {
@@ -49,6 +50,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <DocumentSign />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/documents/:id/preview"
+        element={
+          <ProtectedRoute>
+            <DocumentPreview />
           </ProtectedRoute>
         }
       />

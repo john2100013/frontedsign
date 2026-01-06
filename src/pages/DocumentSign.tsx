@@ -11,6 +11,7 @@ interface Document {
   signed_file_path?: string;
   status: string;
   recipient_status?: string;
+  revision_note?: string;
 }
 
 export function DocumentSign() {
@@ -21,6 +22,7 @@ export function DocumentSign() {
   const [loading, setLoading] = useState(true);
   const [pdfUrl, setPdfUrl] = useState('');
   const [isReadOnly, setIsReadOnly] = useState(false);
+  const [revisionNote, setRevisionNote] = useState<string | null>(null);
 
   useEffect(() => {
     if (id) {
@@ -39,6 +41,22 @@ export function DocumentSign() {
       // Check if document is already signed
       if (doc.recipient_status === 'signed' || doc.status === 'signed') {
         setIsReadOnly(true);
+      }
+
+      // Get revision note if document was sent back
+      if (doc.revision_note) {
+        setRevisionNote(doc.revision_note);
+      } else if (doc.recipient_status === 'sent_back_for_signing' || doc.status === 'sent_back_for_signing') {
+        try {
+          const sentBackResponse = await api.get('/documents/sent-back-for-signing');
+          const sentBackDocs = sentBackResponse.data.documents || [];
+          const sentBackDoc = sentBackDocs.find((d: any) => d.id === parseInt(id!));
+          if (sentBackDoc && sentBackDoc.revision_note) {
+            setRevisionNote(sentBackDoc.revision_note);
+          }
+        } catch (error) {
+          console.error('Failed to load revision note:', error);
+        }
       }
       
       // Get PDF URL
@@ -107,6 +125,11 @@ export function DocumentSign() {
             ← Back
           </button>
           <h1 className="text-xl font-bold">{document.title}</h1>
+          {(document.recipient_status === 'sent_back_for_signing' || document.status === 'sent_back_for_signing') && (
+            <span className="px-2 py-1 bg-red-100 text-red-800 text-xs rounded">
+              Sent Back for Revision
+            </span>
+          )}
         </div>
         <div className="flex items-center space-x-4">
           <button
@@ -125,6 +148,26 @@ export function DocumentSign() {
           )}
         </div>
       </nav>
+
+      {/* Revision Note Alert */}
+      {revisionNote && (
+        <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mx-4 mt-2">
+          <div className="flex">
+            <div className="flex-shrink-0">
+              <span className="text-yellow-400 text-xl">⚠️</span>
+            </div>
+            <div className="ml-3 flex-1">
+              <h3 className="text-sm font-medium text-yellow-800">
+                Document Sent Back for Revision
+              </h3>
+              <div className="mt-2 text-sm text-yellow-700">
+                <p className="font-semibold mb-1">Revision Note:</p>
+                <p className="whitespace-pre-wrap">{revisionNote}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       
       <PDFSigningInterface
         documentId={parseInt(id!)}

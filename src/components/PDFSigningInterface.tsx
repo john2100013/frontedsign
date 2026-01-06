@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
-import Draggable from 'react-draggable';
+import { Draggable } from './Draggable';
 import { Resizable } from 'react-resizable';
 import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
 import 'react-pdf/dist/esm/Page/TextLayer.css';
@@ -8,38 +8,16 @@ import 'react-resizable/css/styles.css';
 import api from '../utils/api';
 import './PDFSigningInterface.css';
 
-// Configure PDF.js worker - use CDN worker for better reliability
-// CRITICAL: Worker version MUST match react-pdf's bundled pdfjs-dist version
+// Configure PDF.js worker - CRITICAL: Worker version MUST match react-pdf's bundled pdfjs-dist version
 const PDFJS_VERSION = pdfjs.version;
 console.log('📄 PDF.js API Version:', PDFJS_VERSION);
 
-// Use CDN worker as primary (more reliable than local file)
-// Fallback to local if CDN fails
-pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.worker.min.mjs`;
-console.log('📄 PDF.js Worker configured (CDN):', pdfjs.GlobalWorkerOptions.workerSrc);
-
-// Test worker availability
-const testWorker = async () => {
-  try {
-    // Try to fetch the worker to verify it's accessible
-    const response = await fetch(pdfjs.GlobalWorkerOptions.workerSrc, { method: 'HEAD' });
-    if (!response.ok) {
-      throw new Error('CDN worker not accessible');
-    }
-    console.log('✅ PDF.js worker is accessible');
-  } catch (error) {
-    console.warn('⚠️ CDN worker test failed, trying local worker:', error);
-    // Fallback to local worker
-    pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
-    console.log('📄 Using local PDF.js worker:', pdfjs.GlobalWorkerOptions.workerSrc);
-  }
-};
-
-// Test worker in background (non-blocking)
-testWorker().catch(() => {
-  // If CDN fails, use local as fallback
-  pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
-});
+// Use public folder worker - Vite serves files from public/ at root path
+// The worker file must be at public/pdf.worker.min.mjs
+// Using relative path which Vite handles correctly
+const WORKER_URL = '/pdf.worker.min.mjs';
+pdfjs.GlobalWorkerOptions.workerSrc = WORKER_URL;
+console.log('📄 PDF.js Worker configured:', pdfjs.GlobalWorkerOptions.workerSrc);
 
 interface TextField {
   id: string;
@@ -90,6 +68,7 @@ export function PDFSigningInterface({
   const [isDrawing, setIsDrawing] = useState(false);
   const [draftData, setDraftData] = useState<any>(null);
   const [pdfReady, setPdfReady] = useState(false);
+  const [workerReady, setWorkerReady] = useState(false);
   const pageRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const signatureCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -115,15 +94,33 @@ export function PDFSigningInterface({
     loadDraft();
   }, [documentId]);
 
-  // Ensure PDF.js worker is properly initialized - run on every render to prevent null worker
+  // Ensure PDF.js worker is properly initialized and verified - run once on mount
   useEffect(() => {
-    // Always ensure worker is configured - this prevents it from becoming null
-    const workerUrl = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;
-    if (!pdfjs.GlobalWorkerOptions.workerSrc || pdfjs.GlobalWorkerOptions.workerSrc !== workerUrl) {
-      pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
-      console.log('🔄 PDF.js worker reinitialized:', pdfjs.GlobalWorkerOptions.workerSrc);
-    }
-  });
+    const initializeWorker = async () => {
+      // Set worker source
+      pdfjs.GlobalWorkerOptions.workerSrc = WORKER_URL;
+      console.log('📄 PDF.js Worker URL set:', pdfjs.GlobalWorkerOptions.workerSrc);
+      
+      // Verify worker file is accessible
+      try {
+        const response = await fetch(WORKER_URL, { method: 'HEAD' });
+        if (response.ok) {
+          console.log('✅ PDF.js worker file is accessible');
+          setWorkerReady(true);
+        } else {
+          console.error('❌ PDF.js worker file not accessible:', response.status);
+          // Still try to proceed - worker might load anyway
+          setWorkerReady(true);
+        }
+      } catch (error) {
+        console.error('❌ Failed to verify worker file:', error);
+        // Still try to proceed - worker might load anyway
+        setWorkerReady(true);
+      }
+    };
+    
+    initializeWorker();
+  }, []);
 
   const loadDraft = async () => {
     try {
@@ -157,13 +154,26 @@ export function PDFSigningInterface({
 
   const loadSignatureImage = async (path: string): Promise<string> => {
     try {
-      const filename = path.split('/').pop() || path.split('\\').pop() || path;
+      // Extract just the filename from the path (handles both / and \ separators)
+      let filename = path;
+      if (path.includes('/')) {
+        filename = path.split('/').pop() || path;
+      } else if (path.includes('\\')) {
+        filename = path.split('\\').pop() || path;
+      }
+      
+      // Remove any leading path components that might be in the filename
+      filename = filename.replace(/^.*[\/\\]/, '');
+      
+      console.log('Loading signature image:', { originalPath: path, extractedFilename: filename });
+      
       const response = await api.get(`/signing/signatures/${filename}`, {
         responseType: 'blob',
       });
       return URL.createObjectURL(response.data);
     } catch (error) {
       console.error('Failed to load signature image:', error);
+      console.error('Path was:', path);
       return '';
     }
   };
@@ -249,7 +259,7 @@ export function PDFSigningInterface({
   const addSignature = async (pageNum: number, x: number, y: number) => {
     // Ensure worker is initialized before adding signature (prevents null worker errors)
     if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-      pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;
+      pdfjs.GlobalWorkerOptions.workerSrc = WORKER_URL;
       console.log('🔄 Worker reinitialized before adding signature');
     }
     
@@ -382,12 +392,16 @@ export function PDFSigningInterface({
   };
 
   const handleSubmit = async () => {
-    if (!confirm('Are you sure you want to submit? The document will become read-only.')) {
+    if (!confirm('Are you sure you want to submit? The document will become read-only and the sender will be notified.')) {
       return;
     }
 
     try {
-      await api.post(`/signing/${documentId}/submit`, {
+      console.log('📤 Submitting signed document...');
+      console.log('   Text fields:', textFields.length);
+      console.log('   Signatures:', signatures.length);
+      
+      const response = await api.post(`/signing/${documentId}/submit`, {
         textFields: textFields.map(tf => ({
           page_number: tf.page_number,
           x_coordinate: tf.x_coordinate,
@@ -407,10 +421,15 @@ export function PDFSigningInterface({
         })),
       });
       
-      alert('Document signed successfully!');
+      console.log('✅ Document submitted successfully:', response.data);
+      alert('Document signed successfully! The sender has been notified and can now preview the signed document.');
       onSubmit();
     } catch (error: any) {
-      alert(error.response?.data?.error || 'Failed to submit signature');
+      console.error('❌ Submit error:', error);
+      console.error('   Response:', error.response?.data);
+      console.error('   Status:', error.response?.status);
+      const errorMessage = error.response?.data?.error || error.message || 'Failed to submit signature';
+      alert(`Failed to submit signature: ${errorMessage}\n\nPlease check the console for more details.`);
     }
   };
 
@@ -422,41 +441,61 @@ export function PDFSigningInterface({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     
+    // Set canvas drawing properties
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 2;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    
+    let drawing = false;
+    
+    const handleMouseDown = (e: MouseEvent) => {
+      e.preventDefault();
+      drawing = true;
+      
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      setIsDrawing(true);
+    };
+    
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!drawing) return;
+      
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    };
+    
+    const handleMouseUp = () => {
+      drawing = false;
+      setIsDrawing(false);
+    };
+    
+    const handleMouseLeave = () => {
+      drawing = false;
+      setIsDrawing(false);
+    };
+    
+    canvas.addEventListener('mousedown', handleMouseDown);
+    canvas.addEventListener('mousemove', handleMouseMove);
+    canvas.addEventListener('mouseup', handleMouseUp);
+    canvas.addEventListener('mouseleave', handleMouseLeave);
+    
+    return () => {
+      canvas.removeEventListener('mousedown', handleMouseDown);
+      canvas.removeEventListener('mousemove', handleMouseMove);
+      canvas.removeEventListener('mouseup', handleMouseUp);
+      canvas.removeEventListener('mouseleave', handleMouseLeave);
+    };
   }, []);
-
-  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    setIsDrawing(true);
-    const canvas = signatureCanvasRef.current;
-    if (!canvas) return;
-    
-    const rect = canvas.getBoundingClientRect();
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    
-    ctx.beginPath();
-    ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
-  };
-
-  const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing) return;
-    const canvas = signatureCanvasRef.current;
-    if (!canvas) return;
-    
-    const rect = canvas.getBoundingClientRect();
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    
-    ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
-    ctx.stroke();
-  };
-
-  const stopDrawing = () => {
-    setIsDrawing(false);
-  };
 
   const clearSignature = () => {
     const canvas = signatureCanvasRef.current;
@@ -582,7 +621,12 @@ export function PDFSigningInterface({
 
         <div className="flex justify-center">
           <div className="relative">
-            {pdfUrl ? (
+            {!workerReady ? (
+              <div className="text-center p-8">
+                <div className="text-lg mb-2">Initializing PDF.js worker...</div>
+                <div className="text-sm text-gray-500">Please wait</div>
+              </div>
+            ) : pdfUrl ? (
               <Document
                 file={pdfUrl}
                 onLoadSuccess={onDocumentLoadSuccess}
@@ -595,7 +639,7 @@ export function PDFSigningInterface({
                     console.error('⚠️ PDF.js worker error detected. Attempting to reinitialize...');
                     // Try to reinitialize the worker
                     try {
-                      pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+                      pdfjs.GlobalWorkerOptions.workerSrc = WORKER_URL;
                       console.log('🔄 Worker reinitialized');
                     } catch (reinitError) {
                       console.error('❌ Failed to reinitialize worker:', reinitError);
@@ -644,7 +688,7 @@ export function PDFSigningInterface({
                         if (error.message?.includes('worker') || error.message?.includes('sendWithPromise')) {
                           console.error('⚠️ Page load worker error. Reinitializing worker...');
                           // Reinitialize worker immediately
-                          pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;
+                          pdfjs.GlobalWorkerOptions.workerSrc = WORKER_URL;
                           // Force re-render by updating a state
                           setPageNumber(prev => prev);
                         }
@@ -655,7 +699,7 @@ export function PDFSigningInterface({
                           <button
                             onClick={() => {
                               // Reinitialize worker and retry
-                              pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;
+                              pdfjs.GlobalWorkerOptions.workerSrc = WORKER_URL;
                               setPageNumber(prev => prev === pageNum ? prev + 0.1 : prev);
                             }}
                             className="mt-2 px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700"
@@ -919,10 +963,6 @@ export function PDFSigningInterface({
                   className={`border-2 rounded cursor-crosshair ${
                     mode === 'signature' ? 'border-blue-500 shadow-md' : 'border-gray-300'
                   }`}
-                  onMouseDown={startDrawing}
-                  onMouseMove={draw}
-                  onMouseUp={stopDrawing}
-                  onMouseLeave={stopDrawing}
                   style={{ touchAction: 'none' }}
                 />
               </div>
